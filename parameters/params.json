@@ -1,0 +1,5 @@
+{
+    "data_dir": "/home/kishore/workspace/Image-Captioning/data",
+    "max_cap_length": 50,
+    "vocab_size": 5000
+}
