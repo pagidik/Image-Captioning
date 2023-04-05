@@ -4,6 +4,8 @@ import tensorflow as tf
 from tensorflow.python.keras import Model
 from tensorflow.python.keras.layers import Add, Dense, Dropout, Embedding, GlobalAveragePooling1D, Input, Layer, LayerNormalization, MultiHeadAttention
 from data import data
+from src.logger import logging
+
 
 class PatchExtractor(Layer):
     def __init__(self):
@@ -20,6 +22,8 @@ class PatchExtractor(Layer):
         )
         patch_dims = patches.shape[-1]
         patches = tf.reshape(patches, [batch_size, -1, patch_dims])
+        
+        logging.info("Patching is completed")
         return patches
     
 def batch(self,img):
@@ -30,6 +34,8 @@ def batch(self,img):
     for i, patch in enumerate(patches[0]):
         ax = plt.subplot(n, n, i + 1)
         patch_img = tf.reshape(patch, (16, 16, 3))
+        
+    logging.info("Batches are created")
     return patches
 
 def get_angles(pos, i, d_model):
@@ -48,6 +54,8 @@ def positional_encoding(position, d_model):
   angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
 
   pos_encoding = angle_rads[np.newaxis, ...]
+  
+  logging.info("Positional Encoding is done")
 
   return tf.cast(pos_encoding, dtype=tf.float32)
 
