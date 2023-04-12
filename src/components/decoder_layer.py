@@ -9,13 +9,7 @@ import numpy as np
 # Import others
 from Encoder import MultiHeadAttention
 
-def point_wise_feed_forward_network(d_model, dff):
-  return tf.keras.Sequential([
-      tf.keras.layers.Dense(dff, activation='relu'),  # (batch_size, seq_len, dff)
-      tf.keras.layers.Dense(d_model)  # (batch_size, seq_len, d_model)
-  ])
-
-### Decoder Layer:
+# Decoder Layer
 class DecoderLayer(tf.keras.layers.Layer):
     def __init__(self, *, d_model, num_heads, dff, rate=0.1):
         super(DecoderLayer, self).__init__()
