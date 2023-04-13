@@ -9,11 +9,6 @@ import json
 import pickle
 from PIL import Image
 
-# dataset = Data(data_dir)
-# tesorflow data object = dataset() 
-
-
-
 class Data():
     def __init__(self, params):
         self.data_dir = params['data_dir']
@@ -131,18 +126,21 @@ class Data():
     
     def rescale(self, img):
         return img/255.
+    
+    def resize(self, img):
+        return tf.image.resize(tf.convert_to_tensor([img]), size=(224, 224))
 
     def transform_image(self):
         # load_image, rescale
         self.image_ds = tf.data.Dataset.from_tensor_slices(self.image_name_vector)
         self.image_ds = self.image_ds.map(self.load_image)
         self.image_ds = self.image_ds.map(self.rescale)
-
+        self.image_ds = self.image_ds.map(self.resize)
+        return self.image_ds
     def __call__(self):
 
         self.load_data()
         self.img_to_cap()
         self.path_cap_list()
         self.tokenizer()
-        self.transform_image()
-        print("Success...!")
+        return self.transform_image()

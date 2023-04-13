@@ -2,11 +2,12 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.python.keras import Model
-from tensorflow.python.keras.layers import Add, Dense, Dropout, Embedding, GlobalAveragePooling1D, Input, Layer, LayerNormalization, MultiHeadAttention
+from tensorflow.python.keras.layers import Add, Dense, Dropout, Embedding, GlobalAveragePooling1D, Input, Layer
+from tensorflow.keras.layers import LayerNormalization
+from src.logger import logging
 from data import data
 from vit_keras import vit
-from data import load_image
-from src.logger import logging
+# from data import load_image
 
 vit_model = vit.vit_b32(
         image_size = 224,
@@ -139,7 +140,7 @@ class Block(Layer):
     def __init__(self, projection_dim, num_heads=4, dropout_rate=0.1):
         super(Block, self).__init__()
         self.norm1 = LayerNormalization(epsilon=1e-6)
-        self.attn = MultiHeadAttention(num_heads=num_heads, key_dim=projection_dim, dropout=dropout_rate)
+        self.attn = MultiHeadAttention(d_model=projection_dim, num_heads=num_heads)
         self.norm2 = LayerNormalization(epsilon=1e-6)
         self.mlp = MLP(projection_dim * 2, projection_dim, dropout_rate)
 
@@ -147,7 +148,7 @@ class Block(Layer):
         # Layer normalization 1.
         x1 = self.norm1(x) # encoded_patches
         # Create a multi-head attention layer.
-        attention_output = self.attn(x1, x1)
+        attention_output = self.attn(x1, x1, x1, None)
         # Skip connection 1.
         x2 = Add()([attention_output, x]) #encoded_patches
         # Layer normalization 2.
@@ -180,7 +181,7 @@ class TransformerEncoder(tf.keras.layers.Layer):
         self.norm = LayerNormalization(epsilon=1e-6)
         self.dropout = Dropout(0.5)
 
-  def call(self, x):
+  def call(self, x, training=None, mask=None):
         # Create a [batch_size, projection_dim] tensor.
         for block in self.blocks:
             x = block(x)
@@ -188,7 +189,9 @@ class TransformerEncoder(tf.keras.layers.Layer):
         y = self.dropout(x)
         return y
 
-### Testing the Encoder 
-#sample_encoder = Encoder(1024, vision_transformer_model)
-#sample_encoder_output = sample_encoder(img, training=False, mask=None) # call N times // its N parallel times or N sequential?
-#print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)
+# ### Testing the Encoder
+# IMG_PATH = '/home/kishore/workspace/Image-Captioning/data/train2014/COCO_train2014_000000000009.jpg'
+# img = plt.imread(IMG_PATH)
+# sample_encoder = Block(1024)
+# sample_encoder_output = sample_encoder(img, training=False, mask=None) # call N times // its N parallel times or N sequential?
+# print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)

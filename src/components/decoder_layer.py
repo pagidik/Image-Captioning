@@ -7,7 +7,7 @@ import tensorflow as tf
 import numpy as np
 
 # Import others
-from Encoder import MultiHeadAttention
+from components.Encoder import MultiHeadAttention
 
 # Decoder Layer
 class DecoderLayer(tf.keras.layers.Layer):

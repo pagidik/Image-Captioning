@@ -7,7 +7,7 @@ import tensorflow as tf
 import numpy as np
 
 # Import others
-from decoder_layer import DecoderLayer
+from components.decoder_layer import DecoderLayer
 
 # Main decoder class
 class Decoder(tf.keras.layers.Layer):
