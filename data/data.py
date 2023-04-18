@@ -106,6 +106,7 @@ class Data():
             vocabulary=vocabulary)
 
         self.caption_vector = self.caption_dataset.map(lambda x: self.tokenizer_object(x))
+        return self.caption_vector
 
 
     def mappings(self):
@@ -142,5 +143,6 @@ class Data():
         self.load_data()
         self.img_to_cap()
         self.path_cap_list()
-        self.tokenizer()
-        return self.transform_image()
+        cap_vector = self.tokenizer()
+        image_dataset = self.transform_image()
+        return image_dataset, cap_vector
