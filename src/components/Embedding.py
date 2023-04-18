@@ -13,6 +13,7 @@ class PatchExtractor(Layer):
 
     def call(self, images):
         batch_size = tf.shape(images)[0]
+        print("Patch encoder",images.shape)
         # images = tf.squeeze(images, axis=1)
         patches = tf.image.extract_patches(
             images=images,
