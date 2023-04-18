@@ -6,23 +6,25 @@ from tensorflow.python.keras.layers import Add, Dense, Dropout, Embedding, Globa
 from tensorflow.keras.layers import LayerNormalization
 from src.logger import logging
 from data import data
-from vit_keras import vit
+from components.Embedding import PatchExtractor, positional_encoding
+# from vit_keras import vit
+
 # from data import load_image
 
-vit_model = vit.vit_b32(
-        image_size = 224,
-        activation = 'softmax',
-        pretrained = True,
-        include_top = False,
-        pretrained_top = False,
-        )
+# vit_model = vit.vit_b32(
+#         image_size = 224,
+#         activation = 'softmax',
+#         pretrained = True,
+#         include_top = False,
+#         pretrained_top = False,
+#         )
 
-new_input = vit_model.input
-hidden_layer = vit_model.layers[-2].output
-## The New Vision Transformer Model with the required output shapes 
-vision_transformer_model = tf.keras.Model(new_input, hidden_layer)
+# new_input = vit_model.input
+# hidden_layer = vit_model.layers[-2].output
+# ## The New Vision Transformer Model with the required output shapes 
+# vision_transformer_model = tf.keras.Model(new_input, hidden_layer)
 
-vision_transformer_model.summary()
+# vision_transformer_model.summary()
 
 def create_padding_mask(seq):
   seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
@@ -38,7 +40,6 @@ def create_look_ahead_mask(size):
   return mask  # (seq_len, seq_len)
 
 def scaled_dot_product_attention(q, k, v, mask):
-  
   matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
 
   # scale matmul_qk
@@ -136,7 +137,7 @@ class MLP(Layer):
         y = self.dropout(x)
         return y
     
-class Block(Layer):
+class Block(tf.keras.layers.Layer):
     def __init__(self, projection_dim, num_heads=4, dropout_rate=0.1):
         super(Block, self).__init__()
         self.norm1 = LayerNormalization(epsilon=1e-6)
@@ -144,19 +145,19 @@ class Block(Layer):
         self.norm2 = LayerNormalization(epsilon=1e-6)
         self.mlp = MLP(projection_dim * 2, projection_dim, dropout_rate)
 
-    def call(self, x):
+    def call(self, x, training=None, mask=None):
         # Layer normalization 1.
         x1 = self.norm1(x) # encoded_patches
         # Create a multi-head attention layer.
-        attention_output = self.attn(x1, x1, x1, None)
+        attention_output, _ = self.attn(x1, x1, x1, mask)
         # Skip connection 1.
-        x2 = Add()([attention_output, x]) #encoded_patches
+        x2 = tf.keras.layers.Add()([attention_output, x]) #encoded_patches
         # Layer normalization 2.
         x3 = self.norm2(x2)
         # MLP.
         x3 = self.mlp(x3)
         # Skip connection 2.
-        y = Add()([x3, x2])
+        y = tf.keras.layers.Add()([x3, x2])
         return y
 
 class TransformerEncoder(tf.keras.layers.Layer):
@@ -175,20 +176,23 @@ class TransformerEncoder(tf.keras.layers.Layer):
     
     logging.info("Encoder is created")
     return x'''
+  
   def __init__(self, projection_dim, num_heads=4, num_blocks=12, dropout_rate=0.1):
-        super(TransformerEncoder, self).__init__()
-        self.blocks = [Block(projection_dim, num_heads, dropout_rate) for _ in range(num_blocks)]
-        self.norm = LayerNormalization(epsilon=1e-6)
-        self.dropout = Dropout(0.5)
+      super(TransformerEncoder, self).__init__()
+      self.blocks = [Block(projection_dim, num_heads, dropout_rate) for _ in range(num_blocks)]
+      self.norm = LayerNormalization(epsilon=1e-6)
+      self.dropout = Dropout(dropout_rate)
+      self.units =projection_dim
 
   def call(self, x, training=None, mask=None):
-        # Create a [batch_size, projection_dim] tensor.
-        for block in self.blocks:
-            x = block(x)
-        x = self.norm(x)
-        y = self.dropout(x)
-        return y
-
+      x = PatchExtractor()(x)
+      x+= positional_encoding(x.shape[1], self.units)
+      # Process the input through the blocks.
+      for block in self.blocks:
+          x = block(x, training=training, mask=mask)
+      x = self.norm(x)
+      x = self.dropout(x, training=training)
+      return x
 # ### Testing the Encoder
 # IMG_PATH = '/home/kishore/workspace/Image-Captioning/data/train2014/COCO_train2014_000000000009.jpg'
 # img = plt.imread(IMG_PATH)

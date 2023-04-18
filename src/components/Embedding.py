@@ -2,7 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 from tensorflow.python.keras import Model
-from tensorflow.python.keras.layers import Add, Dense, Dropout, Embedding, GlobalAveragePooling1D, Input, Layer, LayerNormalization, MultiHeadAttention
+from tensorflow.python.keras.layers import  Layer
 from data import data
 from src.logger import logging
 
@@ -13,6 +13,7 @@ class PatchExtractor(Layer):
 
     def call(self, images):
         batch_size = tf.shape(images)[0]
+        # images = tf.squeeze(images, axis=1)
         patches = tf.image.extract_patches(
             images=images,
             sizes=[1, 16, 16, 1],
@@ -27,7 +28,7 @@ class PatchExtractor(Layer):
         return patches
     
 def batch(self,img):
-    batch1 = tf.expand_dims(img,axis=0)
+    batch1 = tf.expand_dims(img,axis=0)[0]
     patches = PatchExtractor()(batch1)
     n = int(np.sqrt(patches.shape[1]))
     n = int(np.sqrt(patches.shape[1]))

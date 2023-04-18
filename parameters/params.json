@@ -1,5 +1,12 @@
 {
-    "data_dir": "/home/kishore/workspace/Image-Captioning/data",
-    "max_cap_length": 50,
-    "vocab_size": 5000
+    "data_dir"        : "data",
+    "max_cap_length"  : 50,
+    "vocab_size"      : 5000,
+    "num_layers"      : 2,
+    "d_model"         : 32,
+    "dff"             : 128,
+    "num_heads"       : 2,
+    "dropout_rate"    : 0.1,
+    "EPOCHS"          : 1,
+    "BATCH_SIZE"      : 64
 }
