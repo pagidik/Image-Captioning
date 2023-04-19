@@ -160,7 +160,7 @@ class Block(Layer):
         return y
     
 class TransformerEncoder(Layer):
-    def __init__(self, projection_dim, num_heads=4, num_blocks=12, dropout_rate=0.1):
+    def __init__(self, projection_dim, num_heads=4, num_blocks=8, dropout_rate=0.1):
         super(TransformerEncoder, self).__init__()
         self.blocks = [Block(projection_dim, num_heads, dropout_rate) for _ in range(num_blocks)]
         self.norm = LayerNormalization(epsilon=1e-6)

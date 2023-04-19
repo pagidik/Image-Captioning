@@ -39,8 +39,9 @@ class DecoderLayer(tf.keras.layers.Layer):
         # enc_output.shape == (batch_size, input_seq_len, d_model)
 
         # print(f"Decoder Layer input x shape: {x.shape}")
-        attn1, attn_weights_block1 = self.mha1(x,x, return_attention_scores=True)  # (batch_size, target_seq_len, d_model)
-
+        # attn1, attn_weights_block1 = self.mha1(x,x, return_attention_scores=True)  # (batch_size, target_seq_len, d_model)
+        attn1, attn_weights_block1 = self.mha1(x, x, x, mask=look_ahead_mask, return_attention_scores=True)
+        attn2, attn_weights_block2 = self.mha2(out1, enc_output, enc_output, mask=padding_mask, return_attention_scores=True)
         # attn1, attn_weights_block1 = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
         attn1 = self.dropout1(attn1, training=training)
         # print("attn2 shape: ", attn1.shape)

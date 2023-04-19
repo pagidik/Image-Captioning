@@ -28,7 +28,7 @@ class PatchExtractor(Layer):
         return patches
 
 class PatchEncoder(Layer):
-    def __init__(self, num_patches=196, projection_dim=768):
+    def __init__(self, num_patches=50, projection_dim=768):
         super(PatchEncoder, self).__init__()
         self.num_patches = num_patches
         self.projection_dim = projection_dim

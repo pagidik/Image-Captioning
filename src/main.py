@@ -1,5 +1,5 @@
 import os
-os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+os.environ['CUDA_VISIBLE_DEVICES'] = '0'
 from data.data import Data
 import json 
 from components.transformer import Transformer
@@ -10,6 +10,21 @@ import matplotlib.pyplot as plt
 import tensorflow as tf 
 import time
 
+physical_devices = tf.config.list_physical_devices()
+print("Physical Devices:", physical_devices)
+
+gpus = tf.config.list_physical_devices('GPU')
+if gpus:
+    try:
+        for gpu in gpus:
+            tf.config.experimental.set_memory_growth(gpu, True)
+        logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+        print(f"{len(gpus)} Physical GPUs, {len(logical_gpus)} Logical GPUs")
+    except RuntimeError as e:
+        print(e)
+else:
+    print("No compatible GPUs found")
+    
 with open('parameters/params.json', 'r') as j:
     params = json.load(j)
 
@@ -148,19 +163,19 @@ image_ds = image_ds.unbatch()
 train_batches = tf.data.Dataset.zip((image_ds, cap_vector))
 
 train_batches = train_batches.batch(BATCH_SIZE).prefetch(tf.data.AUTOTUNE)
-
+print("Running Epochs...")
 for epoch in range(EPOCHS):
+  print("Epoch ", epoch)
   start = time.time()
 
   train_loss.reset_states()
   train_accuracy.reset_states()
 
-  # inp -> portuguese, tar -> english
   for (batch, (inp, tar)) in enumerate(train_batches):
-    #print(inp, tar)
+    # print(inp, tar)
     train_step(inp, tar)
 
-    if batch % 50 == 0:
+    if batch % 1 == 0:
       print(f'Epoch {epoch + 1} Batch {batch} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
 
   if (epoch + 1) % 1 == 0:
