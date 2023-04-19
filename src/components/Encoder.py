@@ -86,12 +86,6 @@ class MultiHeadAttention(tf.keras.layers.Layer):
         k = self.split_heads(k, batch_size)  # (batch_size, num_heads, seq_len_k, depth)
         v = self.split_heads(v, batch_size)  # (batch_size, num_heads, seq_len_v, depth)
 
-        # print(f"Query shape: {q.shape}")
-        # print(f"Key shape: {k.shape}")
-        # print(f"value shape: {v.shape}")
-
-        # scaled_attention.shape == (batch_size, num_heads, seq_len_q, depth)
-        # attention_weights.shape == (batch_size, num_heads, seq_len_q, seq_len_k)
         scaled_attention, attention_weights = scaled_dot_product_attention(
             q, k, v, mask)
 
@@ -222,13 +216,3 @@ class Encoder(tf.keras.layers.Layer):
   #     x = self.dropout(x, training=training)
   #     x = self.dense(x)
   #     return x # (1,max_cap_length, projection_dim)
-# ### Testing the Encoder
-# IMG_PATH = '/home/kishore/workspace/Image-Captioning/data/train2014/COCO_train2014_000000000009.jpg'
-# img = plt.imread(IMG_PATH)
-# resized_image = tf.image.resize(
-#     tf.convert_to_tensor([img]), size=(224, 224)
-# )
-# print(resized_image.shape)
-# sample_encoder = Encoder(1024, vit_model)
-# sample_encoder_output = sample_encoder(resized_image, training=False, mask=None) # call N times // its N parallel times or N sequential?
-# print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)
