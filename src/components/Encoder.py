@@ -241,12 +241,12 @@ print(vit_model.summary())
   #     x = self.dense(x)
   #     return x # (1,max_cap_length, projection_dim)
 # ### Testing the Encoder
-IMG_PATH = '/home/kishore/workspace/Image-Captioning/data/train2014/COCO_train2014_000000000009.jpg'
-img = plt.imread(IMG_PATH)
-resized_image = tf.image.resize(
-    tf.convert_to_tensor([img]), size=(224, 224)
-)
-print(resized_image.shape)
-sample_encoder = Encoder(1024, vit_model)
-sample_encoder_output = sample_encoder(resized_image, training=False, mask=None) # call N times // its N parallel times or N sequential?
-print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)
+# IMG_PATH = '/home/kishore/workspace/Image-Captioning/data/train2014/COCO_train2014_000000000009.jpg'
+# img = plt.imread(IMG_PATH)
+# resized_image = tf.image.resize(
+#     tf.convert_to_tensor([img]), size=(224, 224)
+# )
+# print(resized_image.shape)
+# sample_encoder = Encoder(1024, vit_model)
+# sample_encoder_output = sample_encoder(resized_image, training=False, mask=None) # call N times // its N parallel times or N sequential?
+# print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)
