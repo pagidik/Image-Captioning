@@ -13,9 +13,9 @@ from components.decoder import Decoder
 # Transformer
 class Transformer(tf.keras.Model):
     def __init__(self,*, num_layers, d_model, num_heads, dff,
-                target_vocab_size,  max_tokens, rate=0.1):
+                target_vocab_size,vision_transformer,  max_tokens, rate=0.1):
         super().__init__()
-        self.vision_transformer = create_VisionTransformer()
+        self.vision_transformer = vision_transformer
         self.encoder = Encoder(d_model, self.vision_transformer)
 
         self.decoder = Decoder(num_layers=num_layers, d_model=d_model,
@@ -55,9 +55,12 @@ class Transformer(tf.keras.Model):
         return mask  # (seq_len, seq_len)
 
     def create_masks(self, inp, tar):
+        # Print the shape of the input tensor
+        print("Input tensor shape:", inp.shape) 
         # Encoder padding mask (Used in the 2nd attention block in the decoder too.)
         padding_mask = self.create_padding_mask(inp)
-
+        # Print the shape of the created padding mask
+        print("Padding mask shape:", padding_mask.shape)
         # Used in the 1st attention block in the decoder.
         # It is used to pad and mask future tokens in the input received by
         # the decoder.

@@ -9,6 +9,7 @@ from components.Encoder import Encoder, create_VisionTransformer
 import matplotlib.pyplot as plt
 import tensorflow as tf 
 import time
+from vit_keras import vit
 
 physical_devices = tf.config.list_physical_devices()
 print("Physical Devices:", physical_devices)
@@ -48,8 +49,22 @@ for img in image_ds:
     resized_image = img[0]
     break
 resized_image = tf.expand_dims(resized_image, 0)
+# from data import load_image
 
-vit_model = create_VisionTransformer()
+vit_model = vit.vit_b32(
+        image_size = 224,
+        activation = 'softmax',
+        pretrained = True,
+        include_top = False,
+        pretrained_top = False,
+        )
+
+new_input = vit_model.input
+hidden_layer = vit_model.layers[-2].output
+## The New Vision Transformer Model with the required output shapes 
+vision_transformer_model = tf.keras.Model(new_input, hidden_layer)
+
+# vit_model = create_VisionTransformer()
 ### Testing the Encoder 
 sample_encoder = Encoder(1024, vit_model)
 sample_encoder_output = sample_encoder(resized_image, training=False, mask=None) # call N times // its N parallel times or N sequential?
@@ -123,6 +138,7 @@ transformer = Transformer(
     dff=dff,
     target_vocab_size=vocabulary_size,
     max_tokens = 128,
+    vision_transformer = vision_transformer_model,
     rate=dropout_rate)
 
 checkpoint_path = './checkpoints/train'
@@ -172,7 +188,7 @@ for epoch in range(EPOCHS):
   train_accuracy.reset_states()
 
   for (batch, (inp, tar)) in enumerate(train_batches):
-    # print(inp, tar)
+    print(inp, tar)
     train_step(inp, tar)
 
     if batch % 1 == 0:
