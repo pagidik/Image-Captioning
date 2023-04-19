@@ -1,8 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
-from tensorflow.python.keras import Model
-from tensorflow.python.keras.layers import  Layer
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Add, Dense, Dropout, Embedding, GlobalAveragePooling1D, Input, Layer, LayerNormalization, MultiHeadAttention
 from data import data
 from src.logger import logging
 
@@ -13,7 +13,6 @@ class PatchExtractor(Layer):
 
     def call(self, images):
         batch_size = tf.shape(images)[0]
-        print("Patch encoder",images.shape)
         # images = tf.squeeze(images, axis=1)
         patches = tf.image.extract_patches(
             images=images,
@@ -27,18 +26,31 @@ class PatchExtractor(Layer):
         
         logging.info("Patching is completed")
         return patches
-    
-def batch(self,img):
-    batch1 = tf.expand_dims(img,axis=0)[0]
-    patches = PatchExtractor()(batch1)
-    n = int(np.sqrt(patches.shape[1]))
-    n = int(np.sqrt(patches.shape[1]))
-    for i, patch in enumerate(patches[0]):
-        ax = plt.subplot(n, n, i + 1)
-        patch_img = tf.reshape(patch, (16, 16, 3))
-        
-    logging.info("Batches are created")
-    return patches
+
+class PatchEncoder(Layer):
+    def __init__(self, num_patches=196, projection_dim=768):
+        super(PatchEncoder, self).__init__()
+        self.num_patches = num_patches
+        self.projection_dim = projection_dim
+        w_init = tf.random_normal_initializer()
+        class_token = w_init(shape=(1, 1, projection_dim), dtype="float32")
+        self.class_token = tf.Variable(initial_value=class_token, trainable=True)
+        self.projection = Dense(units=projection_dim)
+        self.position_embedding = Embedding(input_dim=num_patches+1, output_dim=projection_dim)
+
+    def call(self, patch):
+        batch = tf.shape(patch)[0]
+        # Create class token for each batch
+        class_token = tf.tile(self.class_token, multiples=[batch, 1, 1])
+        # Calculate patches embeddings
+        patches_embed = self.projection(patch)
+        patches_embed = tf.concat([class_token, patches_embed], axis=1)
+        # Calculate positional embeddings
+        positions = tf.range(start=0, limit=self.num_patches+1, delta=1)
+        positions_embed = self.position_embedding(positions)
+        # Add both embeddings
+        encoded = patches_embed + positions_embed
+        return encoded
 
 def get_angles(pos, i, d_model):
   angle_rates = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))

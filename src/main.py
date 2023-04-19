@@ -4,7 +4,7 @@ from data.data import Data
 import json 
 from components.transformer import Transformer
 from components.decoder import Decoder
-from components.Encoder import TransformerEncoder
+from components.Encoder import Encoder, create_VisionTransformer
 
 import matplotlib.pyplot as plt
 import tensorflow as tf 
@@ -34,8 +34,9 @@ for img in image_ds:
     break
 resized_image = tf.expand_dims(resized_image, 0)
 
+vit_model = create_VisionTransformer()
 ### Testing the Encoder 
-sample_encoder = TransformerEncoder(768)
+sample_encoder = Encoder(1024, vit_model)
 sample_encoder_output = sample_encoder(resized_image, training=False, mask=None) # call N times // its N parallel times or N sequential?
 print(sample_encoder_output.shape)  # (batch_size, input_seq_len, d_model)
 
@@ -162,7 +163,7 @@ for epoch in range(EPOCHS):
     if batch % 50 == 0:
       print(f'Epoch {epoch + 1} Batch {batch} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
 
-  if (epoch + 1) % 5 == 0:
+  if (epoch + 1) % 1 == 0:
     ckpt_save_path = ckpt_manager.save()
     print(f'Saving checkpoint for epoch {epoch+1} at {ckpt_save_path}')
 

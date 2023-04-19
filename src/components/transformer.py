@@ -7,7 +7,7 @@ import tensorflow as tf
 import numpy as np
 
 # Import others
-from components.Encoder import TransformerEncoder
+from components.Encoder import Encoder, create_VisionTransformer
 from components.decoder import Decoder
 
 # Transformer
@@ -15,8 +15,8 @@ class Transformer(tf.keras.Model):
     def __init__(self,*, num_layers, d_model, num_heads, dff,
                 target_vocab_size,  max_tokens, rate=0.1):
         super().__init__()
-        # self.vision_transformer = vision_transformer
-        self.encoder = TransformerEncoder(d_model)
+        self.vision_transformer = create_VisionTransformer()
+        self.encoder = Encoder(d_model, self.vision_transformer)
 
         self.decoder = Decoder(num_layers=num_layers, d_model=d_model,
                             num_heads=num_heads, dff=dff,
