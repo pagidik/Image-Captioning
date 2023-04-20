@@ -66,7 +66,7 @@ def plot_learning_rate_scheduler(learning_rate_schedule):
     plt.show()
 
 # Define the loss function
-def loss_function(real, pred):
+def loss_function(real, pred, loss_object):
     mask = tf.math.logical_not(tf.math.equal(real, 0))
     loss_ = loss_object(real, pred)
 
@@ -86,6 +86,7 @@ def accuracy_function(real, pred):
     mask = tf.cast(mask, dtype=tf.float32)
     return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
 
+@tf.function
 def train_step(inp, tar, transformer, optimizer, loss_object, train_loss, train_accuracy, gradients_values):
     tar_inp = tar[:, :-1]
     tar_real = tar[:, 1:]
@@ -96,7 +97,7 @@ def train_step(inp, tar, transformer, optimizer, loss_object, train_loss, train_
 
     gradients = tape.gradient(loss, transformer.trainable_variables)
     optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
-    gradients_values.extend([grad.numpy().flatten() for grad in gradients])
+    # gradients_values.extend([grad.numpy().flatten() for grad in gradients])
 
     train_loss(loss)
     train_accuracy(accuracy_function(tar_real, predictions))

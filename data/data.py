@@ -138,6 +138,30 @@ class Data():
         self.image_ds = self.image_ds.map(self.rescale)
         self.image_ds = self.image_ds.map(self.resize)
         return self.image_ds
+    def get_test_data(self):
+        # Get the first 10 image paths and captions as test data
+        test_image_paths = self.train_image_paths[:10]
+        test_captions = []
+        test_image_name_vector = []
+        for img_path in test_image_paths:
+            cap_list = self.image_path_to_cap[img_path]
+            test_captions.extend(cap_list)
+            test_image_name_vector.extend([img_path] * len(cap_list))
+
+        # Update image_name_vector_test attribute
+        self.image_name_vector_test = test_image_name_vector
+
+        # Create test image dataset
+        test_image_ds = tf.data.Dataset.from_tensor_slices(test_image_name_vector)
+        test_image_ds = test_image_ds.map(self.load_image)
+        test_image_ds = test_image_ds.map(self.rescale)
+        test_image_ds = test_image_ds.map(self.resize)
+
+        # Create test caption dataset
+        test_caption_ds = tf.data.Dataset.from_tensor_slices(test_captions)
+        test_caption_vector = test_caption_ds.map(lambda x: self.tokenizer_object(x))
+
+        return test_image_ds, test_caption_vector
     def __call__(self):
 
         self.load_data()

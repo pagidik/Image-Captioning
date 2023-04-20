@@ -64,27 +64,3 @@ class Decoder(tf.keras.layers.Layer):
         return x, attention_weights
 
 
-
-
-###########################################
-##### MOVE ALL OF THIS TO A TEST FILE #####
-###########################################
-
-# # Test
-# sample_encoder = TransformerEncoder(1024, vision_transformer_model)
-# sample_encoder_output = sample_encoder(resized_image, training=False, mask=None) # call N times // its N parallel times or N sequential?
-# sample_decoder = Decoder(num_layers=2, d_model=1024, num_heads=8,
-#                          dff=2048, target_vocab_size=8000, max_tokens = 128)
-# temp_input = tf.random.uniform((1, 50), dtype=tf.int64, minval=0, maxval=200)
-
-# output, attn = sample_decoder(temp_input,
-#                               enc_output=sample_encoder_output,
-#                               training=False,
-#                               look_ahead_mask=None,
-#                               padding_mask=None)
-
-# output.shape, attn['decoder_layer2_block2'].shape
-
-###########################################
-##### MOVE ALL OF THIS TO A TEST FILE #####
-###########################################

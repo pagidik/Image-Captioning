@@ -56,11 +56,9 @@ class Transformer(tf.keras.Model):
 
     def create_masks(self, inp, tar):
         # Print the shape of the input tensor
-        print("Input tensor shape:", inp.shape) 
         # Encoder padding mask (Used in the 2nd attention block in the decoder too.)
         padding_mask = self.create_padding_mask(inp)
         # Print the shape of the created padding mask
-        print("Padding mask shape:", padding_mask.shape)
         # Used in the 1st attention block in the decoder.
         # It is used to pad and mask future tokens in the input received by
         # the decoder.

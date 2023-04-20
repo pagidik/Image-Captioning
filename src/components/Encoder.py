@@ -182,37 +182,3 @@ class Encoder(tf.keras.layers.Layer):
     logging.info("Encoder is created")
     return x 
  
-# class Encoder(tf.keras.layers.Layer):
-#     def __init__(self, d_model, vision_transformer):
-#         super(Encoder, self).__init__()
-#         self.vit = vision_transformer  # Custom Vision Transformer model
-#         self.units = d_model
-#         self.dense = tf.keras.layers.Dense(self.units, activation=tf.nn.gelu)  # FC
-
-#     def call(self, x, training, mask):
-#         ## x: (batch, image_size, image_size, 3)
-#         x = self.vit(x)
-#         print(x.shape)
-#         x = self.dense(x)
-#         return x
-    
- 
-  # def __init__(self, projection_dim, num_heads=4, num_blocks=12, dropout_rate=0.1):
-  #     super(TransformerEncoder, self).__init__()
-  #     self.blocks = [Block(projection_dim, num_heads, dropout_rate) for _ in range(num_blocks)]
-  #     self.norm = LayerNormalization(epsilon=1e-6)
-  #     self.dropout = Dropout(dropout_rate)
-  #     self.units = projection_dim
-  #     self.dense = tf.keras.layers.Dense(self.units, activation=tf.nn.gelu) # FC
-
-  # def call(self, x, training=None, mask=None):
-  #     print("Encoder Input:", x.shape)
-  #     x = PatchEncoder()(x)
-  #     x+= positional_encoding(x.shape[1], self.units)
-  #     # Process the input through the blocks.
-  #     for block in self.blocks:
-  #         x = block(x, training=training, mask=mask)
-  #     x = self.norm(x)
-  #     x = self.dropout(x, training=training)
-  #     x = self.dense(x)
-  #     return x # (1,max_cap_length, projection_dim)
