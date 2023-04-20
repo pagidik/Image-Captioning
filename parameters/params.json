@@ -1,0 +1,12 @@
+{
+    "data_dir"        : "data",
+    "max_cap_length"  : 50,
+    "vocab_size"      : 5000,
+    "num_layers"      : 2,
+    "d_model"         : 768,
+    "dff"             : 2048,
+    "num_heads"       : 2,
+    "dropout_rate"    : 0.1,
+    "EPOCHS"          : 10,
+    "BATCH_SIZE"      : 64
+}
