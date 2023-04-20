@@ -1,0 +1,1000 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.python.keras import Model
+from tensorflow.python.keras.layers import Add, Dense, Dropout, Embedding, GlobalAveragePooling1D, Input, Layer
+from tensorflow.keras.layers import LayerNormalization, MultiHeadAttention
+from src.logger import logging
+from data import data
+from components.Embedding import PatchExtractor, PatchEncoder, positional_encoding
+
+
+def create_padding_mask(seq):
+  seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
+
+  # add extra dimensions to add the padding
+  # to the attention logits.
+  logging.info("Padding mask is created")
+  return seq[:, tf.newaxis, tf.newaxis, :]  # (batch_size, 1, 1, seq_len)
+
+def create_look_ahead_mask(size):
+  mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
+  logging.info("Look ahead mask is created")
+  return mask  # (seq_len, seq_len)
+
+def scaled_dot_product_attention(q, k, v, mask):
+  matmul_qk = tf.matmul(q, k, transpose_b=True)  # (..., seq_len_q, seq_len_k)
+
+  # scale matmul_qk
+  dk = tf.cast(tf.shape(k)[-1], tf.float32)
+  scaled_attention_logits = matmul_qk / tf.math.sqrt(dk)
+
+  # add the mask to the scaled tensor.
+  if mask is not None:
+    scaled_attention_logits += (mask * -1e9)
+
+  # softmax is normalized on the last axis (seq_len_k) so that the scores
+  # add up to 1.
+  attention_weights = tf.nn.softmax(scaled_attention_logits, axis=-1)  # (..., seq_len_q, seq_len_k)
+
+  output = tf.matmul(attention_weights, v)  # (..., seq_len_q, depth_v)
+  
+  logging.info("Scaled Dot product attention is created")
+
+  return output, attention_weights
+
+def print_out(q, k, v):
+  temp_out, temp_attn = scaled_dot_product_attention(
+      q, k, v, None)
+  print('Attention weights are:')
+  print(temp_attn)
+  print('Output is:')
+  print(temp_out)
+  
+  
+class MultiHeadAttention(tf.keras.layers.Layer):
+    def __init__(self,*, d_model, num_heads):
+        super(MultiHeadAttention, self).__init__()
+        self.num_heads = num_heads
+        self.d_model = d_model
+
+        assert d_model % self.num_heads == 0
+
+        self.depth = d_model // self.num_heads
+
+        self.wq = tf.keras.layers.Dense(d_model)
+        self.wk = tf.keras.layers.Dense(d_model)
+        self.wv = tf.keras.layers.Dense(d_model)
+
+        self.dense = tf.keras.layers.Dense(d_model)
+
+    def split_heads(self, x, batch_size):
+        """Split the last dimension into (num_heads, depth).
+        Transpose the result such that the shape is (batch_size, num_heads, seq_len, depth)
+        """
+        x = tf.reshape(x, (batch_size, -1, self.num_heads, self.depth))
+        return tf.transpose(x, perm=[0, 2, 1, 3])
+
+    def call(self, v, k, q, mask):
+        batch_size = tf.shape(q)[0]
+
+        q = self.wq(q)  # (batch_size, seq_len, d_model)
+        k = self.wk(k)  # (batch_size, seq_len, d_model)
+        v = self.wv(v)  # (batch_size, seq_len, d_model)
+
+        q = self.split_heads(q, batch_size)  # (batch_size, num_heads, seq_len_q, depth)
+        k = self.split_heads(k, batch_size)  # (batch_size, num_heads, seq_len_k, depth)
+        v = self.split_heads(v, batch_size)  # (batch_size, num_heads, seq_len_v, depth)
+
+        scaled_attention, attention_weights = scaled_dot_product_attention(
+            q, k, v, mask)
+
+        scaled_attention = tf.transpose(scaled_attention, perm=[0, 2, 1, 3])  # (batch_size, seq_len_q, num_heads, depth)
+
+        concat_attention = tf.reshape(scaled_attention,
+                                    (batch_size, -1, self.d_model))  # (batch_size, seq_len_q, d_model)
+
+        output = self.dense(concat_attention)  # (batch_size, seq_len_q, d_model)
+        
+        logging.info("MultiHead Attention is created")
+
+        return output, attention_weights
+
+class MLP(Layer):
+    def __init__(self, hidden_features, out_features, dropout_rate=0.1):
+        super(MLP, self).__init__()
+        self.dense1 = Dense(hidden_features, activation=tf.nn.gelu)
+        self.dense2 = Dense(out_features)
+        self.dropout = Dropout(dropout_rate)
+
+    def call(self, x):
+        x = self.dense1(x)
+        x = self.dropout(x)
+        x = self.dense2(x)
+        y = self.dropout(x)
+        return y
+    
+class Block(Layer):
+    def __init__(self, projection_dim, num_heads=4, dropout_rate=0.1):
+        super(Block, self).__init__()
+        self.norm1 = LayerNormalization(epsilon=1e-6)
+        self.attn = MultiHeadAttention(num_heads=num_heads, d_model=projection_dim)
+        # self.attn = MultiHeadAttention(num_heads=num_heads, key_dim=projection_dim, dropout=dropout_rate)
+
+        self.norm2 = LayerNormalization(epsilon=1e-6)
+        self.mlp = MLP(projection_dim * 2, projection_dim, dropout_rate)
+
+    def call(self, x):
+        # Layer normalization 1.
+        x1 = self.norm1(x) # encoded_patches
+        # Create a multi-head attention layer.
+        attention_output = self.attn(x1, x1)
+        # Skip connection 1.
+        x2 = Add()([attention_output, x]) #encoded_patches
+        # Layer normalization 2.
+        x3 = self.norm2(x2)
+        # MLP.
+        x3 = self.mlp(x3)
+        # Skip connection 2.
+        y = Add()([x3, x2])
+        return y
+    
+class TransformerEncoder(Layer):
+    def __init__(self, projection_dim, num_heads=4, num_blocks=8, dropout_rate=0.1):
+        super(TransformerEncoder, self).__init__()
+        self.blocks = [Block(projection_dim, num_heads, dropout_rate) for _ in range(num_blocks)]
+        self.norm = LayerNormalization(epsilon=1e-6)
+        self.dropout = Dropout(0.5)
+
+    def call(self, x):
+        # Create a [batch_size, projection_dim] tensor.
+        for block in self.blocks:
+            x = block(x)
+        x = self.norm(x)
+        y = self.dropout(x)
+        return y
+    
+def create_VisionTransformer(num_patches=196, projection_dim=768, input_shape=(224, 224, 3)):
+    inputs = Input(shape=input_shape)
+    # Patch extractor
+    patches = PatchExtractor()(inputs)
+    # Patch encoder
+    patches_embed = PatchEncoder(num_patches, projection_dim)(patches)
+    print("Patch encoder",patches_embed.shape)
+    # Transformer encoder
+    representation = TransformerEncoder(projection_dim)(patches_embed)
+    # Create model
+    model = Model(inputs=inputs, outputs=representation)
+    return model
+
+class Encoder(tf.keras.layers.Layer):
+  def __init__(self, d_model, vision_transformer):
+    super(Encoder, self).__init__()
+    self.vit = vision_transformer # 12 encoder blocks
+    self.units = d_model
+    self.dense = tf.keras.layers.Dense(self.units, activation=tf.nn.gelu) # FC
+
+  def call(self, x, training, mask):
+    ## x: (batch, image_size, image_size, 3)
+    x = self.vit(x)
+    x = self.dense(x) 
+    
+    logging.info("Encoder is created")
+    return x 
+ 
+ """
+Main decoder script.
+"""
+
+# Import dependencies
+import tensorflow as tf
+import numpy as np
+
+# Import others
+from components.decoder_layer import DecoderLayer
+
+# Main decoder class
+class Decoder(tf.keras.layers.Layer):
+    def __init__(self, *, num_layers, d_model, num_heads, dff, target_vocab_size, max_tokens, rate=0.1):
+        super(Decoder, self).__init__()
+
+        self.d_model = d_model
+        self.num_layers = num_layers
+        self.max_tokens =  max_tokens
+
+        self.embedding = tf.keras.layers.Embedding(target_vocab_size, d_model)
+        self.pos_encoding = self.positional_encoding(max_tokens, d_model)
+
+        self.dec_layers = [
+            DecoderLayer(d_model=d_model, num_heads=num_heads, dff=dff, rate=rate)
+            for _ in range(num_layers)]
+        self.dropout = tf.keras.layers.Dropout(rate)
+
+    def get_angles(self, pos, i, d_model):
+        angle_rates = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
+        return pos * angle_rates
+
+    def positional_encoding(self, position, d_model):
+        angle_rads = self.get_angles(np.arange(position)[:, np.newaxis],
+                                np.arange(d_model)[np.newaxis, :],
+                                d_model)
+
+        # apply sin to even indices in the array; 2i
+        angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
+
+        # apply cos to odd indices in the array; 2i+1
+        angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
+
+        pos_encoding = angle_rads[np.newaxis, ...]
+
+        return tf.cast(pos_encoding, dtype=tf.float32)
+
+    def call(self, x, enc_output, training, look_ahead_mask, padding_mask):
+
+        seq_len = tf.shape(x)[1]
+        attention_weights = {}
+
+        x = self.embedding(x)  # (batch_size, target_seq_len, d_model)
+        x *= tf.math.sqrt(tf.cast(self.d_model, tf.float32))
+        x += self.pos_encoding[:, :seq_len, :]
+
+        x = self.dropout(x, training=training)
+
+        for i in range(self.num_layers):
+            x, block1, block2 = self.dec_layers[i](x, enc_output, training, look_ahead_mask, padding_mask)
+            attention_weights[f'decoder_layer{i+1}_block1'] = block1
+            attention_weights[f'decoder_layer{i+1}_block2'] = block2
+        # x.shape == (batch_size, target_seq_len, d_model)
+        return x, attention_weights
+
+"""
+Main decoder layer script.
+"""
+
+# Import dependencies
+import tensorflow as tf
+import numpy as np
+
+# Import others
+from components.Encoder import MultiHeadAttention
+
+# Decoder Layer
+class DecoderLayer(tf.keras.layers.Layer):
+    def __init__(self, *, d_model, num_heads, dff, rate=0.1):
+        super(DecoderLayer, self).__init__()
+        self.mha1 = MultiHeadAttention(d_model=d_model, num_heads=num_heads)
+        self.mha2 = MultiHeadAttention(d_model=d_model, num_heads=num_heads)
+
+        self.ffn = self.point_wise_feed_forward_network(d_model, dff)
+
+        self.layernorm1 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm2 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+        self.layernorm3 = tf.keras.layers.LayerNormalization(epsilon=1e-6)
+
+        self.dropout1 = tf.keras.layers.Dropout(rate)
+        self.dropout2 = tf.keras.layers.Dropout(rate)
+        self.dropout3 = tf.keras.layers.Dropout(rate)
+
+    def point_wise_feed_forward_network(self, d_model, dff):
+        return tf.keras.Sequential([
+            tf.keras.layers.Dense(dff, activation='relu'),  # (batch_size, seq_len, dff)
+            tf.keras.layers.Dense(d_model)  # (batch_size, seq_len, d_model)
+        ])
+
+    def call(self, x, enc_output, training, look_ahead_mask, padding_mask):
+        # enc_output.shape == (batch_size, input_seq_len, d_model)
+
+     
+        attn1, attn_weights_block1 = self.mha1(x, x, x, look_ahead_mask)  # (batch_size, target_seq_len, d_model)
+        attn1 = self.dropout1(attn1, training=training)
+        # print("attn2 shape: ", attn1.shape)
+        # print(f"x shape: {x.shape}")
+        out1 = self.layernorm1(attn1 + x)
+
+
+
+        attn2, attn_weights_block2 = self.mha2(
+            enc_output, enc_output, out1, None)  # (batch_size, target_seq_len, d_model)
+        attn2 = self.dropout2(attn2, training=training)
+        out2 = self.layernorm2(attn2 + out1)  # (batch_size, target_seq_len, d_model)
+
+        ffn_output = self.ffn(out2)  # (batch_size, target_seq_len, d_model)
+        ffn_output = self.dropout3(ffn_output, training=training)
+        out3 = self.layernorm3(ffn_output + out2)  # (batch_size, target_seq_len, d_model)
+
+        return out3, attn_weights_block1, attn_weights_block2
+
+"""
+Main transformer script.
+"""
+
+# Import dependencies
+import tensorflow as tf
+import numpy as np
+
+# Import others
+from components.Encoder import Encoder, create_VisionTransformer
+from components.decoder import Decoder
+
+# Transformer
+class Transformer(tf.keras.Model):
+    def __init__(self,*, num_layers, d_model, num_heads, dff,
+                target_vocab_size,vision_transformer,  max_tokens, rate=0.1):
+        super().__init__()
+        self.vision_transformer = vision_transformer
+        self.encoder = Encoder(d_model, self.vision_transformer)
+
+        self.decoder = Decoder(num_layers=num_layers, d_model=d_model,
+                            num_heads=num_heads, dff=dff,
+                            target_vocab_size=target_vocab_size, max_tokens=max_tokens, rate=rate)
+
+        self.final_layer = tf.keras.layers.Dense(target_vocab_size)
+
+    def call(self, inputs, training):
+        # Keras models prefer if you pass all your inputs in the first argument
+        #print("Transformer call function called")
+        inp, tar = inputs
+        #print(f"inp: {inp.shape}.     tar: {tar.shape}")
+        padding_mask, look_ahead_mask = self.create_masks(inp, tar)
+
+        #print(f"Mask shapes: {padding_mask.shape}.    {look_ahead_mask.shape}")
+
+        enc_output = self.encoder(inp, training, None)  # (batch_size, inp_seq_len, d_model)
+        #print("Encoder Works")
+        # dec_output.shape == (batch_size, tar_seq_len, d_model)
+        dec_output, attention_weights = self.decoder(
+            tar, enc_output, training, look_ahead_mask, padding_mask)
+
+        final_output = self.final_layer(dec_output)  # (batch_size, tar_seq_len, target_vocab_size)
+
+        return final_output, attention_weights
+
+    def create_padding_mask(self, seq):
+        seq = tf.cast(tf.math.equal(seq, 0), tf.float32)
+
+        # add extra dimensions to add the padding
+        # to the attention logits.
+        return seq[:, tf.newaxis, tf.newaxis, :]  # (batch_size, 1, 1, seq_len)
+
+    def create_look_ahead_mask(self, size):
+        mask = 1 - tf.linalg.band_part(tf.ones((size, size)), -1, 0)
+        return mask  # (seq_len, seq_len)
+
+    def create_masks(self, inp, tar):
+        # Print the shape of the input tensor
+        # Encoder padding mask (Used in the 2nd attention block in the decoder too.)
+        padding_mask = self.create_padding_mask(inp)
+        # Print the shape of the created padding mask
+        # Used in the 1st attention block in the decoder.
+        # It is used to pad and mask future tokens in the input received by
+        # the decoder.
+        look_ahead_mask = self.create_look_ahead_mask(tf.shape(tar)[1])
+        dec_target_padding_mask = self.create_padding_mask(tar)
+        look_ahead_mask = tf.maximum(dec_target_padding_mask, look_ahead_mask)
+
+        return padding_mask, look_ahead_mask
+    
+    
+"""
+Main optimizer script.
+"""
+
+# Import dependencies
+import tensorflow as tf
+
+# Scheduler
+class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+    def __init__(self, d_model, warmup_steps=4000):
+        super(CustomSchedule, self).__init__()
+
+        self.d_model = d_model
+        self.d_model = tf.cast(self.d_model, tf.float32)
+
+        self.warmup_steps = warmup_steps
+
+    def __call__(self, step):
+        arg1 = tf.math.rsqrt(tf.cast(step, tf.float32))
+        arg2 = tf.cast(step, tf.float32) * (tf.cast(self.warmup_steps, tf.float32) ** -1.5)
+        return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+    
+    
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras import Model
+from tensorflow.keras.layers import Add, Dense, Dropout, Embedding, GlobalAveragePooling1D, Input, Layer, LayerNormalization, MultiHeadAttention
+from data import data
+from src.logger import logging
+
+
+class PatchExtractor(Layer):
+    def __init__(self):
+        super(PatchExtractor, self).__init__()
+
+    def call(self, images):
+        batch_size = tf.shape(images)[0]
+        # images = tf.squeeze(images, axis=1)
+        patches = tf.image.extract_patches(
+            images=images,
+            sizes=[1, 16, 16, 1],
+            strides=[1, 16, 16, 1],
+            rates=[1, 1, 1, 1],
+            padding="VALID",
+        )
+        patch_dims = patches.shape[-1]
+        patches = tf.reshape(patches, [batch_size, -1, patch_dims])
+        
+        logging.info("Patching is completed")
+        return patches
+
+class PatchEncoder(Layer):
+    def __init__(self, num_patches=50, projection_dim=768):
+        super(PatchEncoder, self).__init__()
+        self.num_patches = num_patches
+        self.projection_dim = projection_dim
+        w_init = tf.random_normal_initializer()
+        class_token = w_init(shape=(1, 1, projection_dim), dtype="float32")
+        self.class_token = tf.Variable(initial_value=class_token, trainable=True)
+        self.projection = Dense(units=projection_dim)
+        self.position_embedding = Embedding(input_dim=num_patches+1, output_dim=projection_dim)
+
+    def call(self, patch):
+        batch = tf.shape(patch)[0]
+        # Create class token for each batch
+        class_token = tf.tile(self.class_token, multiples=[batch, 1, 1])
+        # Calculate patches embeddings
+        patches_embed = self.projection(patch)
+        patches_embed = tf.concat([class_token, patches_embed], axis=1)
+        # Calculate positional embeddings
+        positions = tf.range(start=0, limit=self.num_patches+1, delta=1)
+        positions_embed = self.position_embedding(positions)
+        # Add both embeddings
+        encoded = patches_embed + positions_embed
+        return encoded
+
+def get_angles(pos, i, d_model):
+  angle_rates = 1 / np.power(10000, (2 * (i//2)) / np.float32(d_model))
+  return pos * angle_rates
+
+def positional_encoding(position, d_model):
+  angle_rads = get_angles(np.arange(position)[:, np.newaxis],
+                          np.arange(d_model)[np.newaxis, :],
+                          d_model)
+
+  # apply sin to even indices in the array; 2i
+  angle_rads[:, 0::2] = np.sin(angle_rads[:, 0::2])
+
+  # apply cos to odd indices in the array; 2i+1
+  angle_rads[:, 1::2] = np.cos(angle_rads[:, 1::2])
+
+  pos_encoding = angle_rads[np.newaxis, ...]
+  
+  logging.info("Positional Encoding is done")
+
+  return tf.cast(pos_encoding, dtype=tf.float32)
+
+
+
+'''
+Main Train function
+'''
+import os
+import json
+import time
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from vit_keras import vit
+from data.data import Data
+from components.transformer import Transformer
+from components.decoder import Decoder
+from components.Encoder import Encoder, create_VisionTransformer
+from nltk.translate.bleu_score import corpus_bleu
+import numpy as np
+
+# Set the GPU configuration
+def set_gpu_config():
+    os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+    physical_devices = tf.config.list_physical_devices()
+    print("Physical Devices:", physical_devices)
+
+    gpus = tf.config.list_physical_devices('GPU')
+    if gpus:
+        try:
+            for gpu in gpus:
+                tf.config.experimental.set_memory_growth(gpu, True)
+            logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+            print(f"{len(gpus)} Physical GPUs, {len(logical_gpus)} Logical GPUs")
+        except RuntimeError as e:
+            print(e)
+    else:
+        print("No compatible GPUs found")
+
+# Load the hyperparameters from JSON file
+def load_hyperparams(json_file):
+    with open(json_file, 'r') as j:
+        params = json.load(j)
+    return params
+
+# Create the learning rate scheduler
+def create_learning_rate_scheduler(d_model):
+    class CustomSchedule(tf.keras.optimizers.schedules.LearningRateSchedule):
+        def __init__(self, d_model, warmup_steps=4000):
+            super(CustomSchedule, self).__init__()
+
+            self.d_model = d_model
+            self.d_model = tf.cast(self.d_model, tf.float32)
+
+            self.warmup_steps = warmup_steps
+
+        def __call__(self, step):
+            arg1 = tf.math.rsqrt(tf.cast(step, tf.float32))
+            arg2 = tf.cast(step, tf.float32) * (tf.cast(self.warmup_steps, tf.float32) ** -1.5)
+            return tf.math.rsqrt(self.d_model) * tf.math.minimum(arg1, arg2)
+
+    learning_rate = CustomSchedule(d_model)
+    return learning_rate
+
+# Plot the learning rate scheduler
+def plot_learning_rate_scheduler(learning_rate_schedule):
+    plt.plot(learning_rate_schedule(tf.range(40000, dtype=tf.float32)))
+    plt.ylabel('Learning Rate')
+    plt.xlabel('Train Step')
+    plt.savefig('results/LearningRateScheduler.png')
+    plt.show()
+
+# Define the loss function
+def loss_function(real, pred, loss_object):
+    mask = tf.math.logical_not(tf.math.equal(real, 0))
+    loss_ = loss_object(real, pred)
+
+    mask = tf.cast(mask, dtype=loss_.dtype)
+    loss_ *= mask
+
+    return tf.reduce_sum(loss_)/tf.reduce_sum(mask)
+
+# Define the accuracy function
+def accuracy_function(real, pred):
+    accuracies = tf.equal(real, tf.argmax(pred, axis=2))
+
+    mask = tf.math.logical_not(tf.math.equal(real, 0))
+    accuracies = tf.math.logical_and(mask, accuracies)
+
+    accuracies = tf.cast(accuracies, dtype=tf.float32)
+    mask = tf.cast(mask, dtype=tf.float32)
+    return tf.reduce_sum(accuracies)/tf.reduce_sum(mask)
+
+@tf.function
+def train_step(inp, tar, transformer, optimizer, loss_object, train_loss, train_accuracy, gradients_values):
+    tar_inp = tar[:, :-1]
+    tar_real = tar[:, 1:]
+
+    with tf.GradientTape() as tape:
+        predictions, _ = transformer([inp, tar_inp], training=True)
+        loss = loss_function(tar_real, predictions, loss_object)
+
+    gradients = tape.gradient(loss, transformer.trainable_variables)
+    optimizer.apply_gradients(zip(gradients, transformer.trainable_variables))
+    # gradients_values.extend([grad.numpy().flatten() for grad in gradients])
+
+    train_loss(loss)
+    train_accuracy(accuracy_function(tar_real, predictions))
+
+def main_train(params):
+    set_gpu_config()
+
+    ## Load Dataset
+    dataset = Data(params)
+    image_ds, cap_vector = dataset()
+    vit_model = vit.vit_b32(
+            image_size = 224,
+            activation = 'softmax',
+            pretrained = True,
+            include_top = False,
+            pretrained_top = False,
+            )
+
+    new_input = vit_model.input
+    hidden_layer = vit_model.layers[-2].output
+    ## The New Vision Transformer Model with the required output shapes 
+    vision_transformer_model = tf.keras.Model(new_input, hidden_layer)
+    # vit_model = create_vit_model()
+
+    learning_rate = create_learning_rate_scheduler(params['d_model'])
+    optimizer = tf.keras.optimizers.Adam(learning_rate, beta_1=0.9, beta_2=0.98, epsilon=1e-9)
+
+    loss_object = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True, reduction='none')
+
+    train_loss = tf.keras.metrics.Mean(name='train_loss')
+    train_accuracy = tf.keras.metrics.Mean(name='train_accuracy')
+
+    transformer = Transformer(
+        num_layers=params['num_layers'],
+        d_model=params['d_model'],
+        num_heads=params['num_heads'],
+        dff=params['dff'],
+        target_vocab_size=params['vocab_size'],
+        max_tokens=128,
+        vision_transformer=vision_transformer_model,
+        rate=params['dropout_rate'])
+
+    checkpoint_path = './checkpoints/train'
+
+    ckpt = tf.train.Checkpoint(transformer=transformer, optimizer=optimizer)
+
+    ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
+
+    if ckpt_manager.latest_checkpoint:
+        ckpt.restore(ckpt_manager.latest_checkpoint)
+        print('Latest checkpoint restored!!')
+
+    image_ds = image_ds.unbatch()
+    train_batches = tf.data.Dataset.zip((image_ds, cap_vector))
+
+    train_batches = train_batches.batch(params['BATCH_SIZE']).prefetch(tf.data.AUTOTUNE)
+
+    batch_accuracies = []
+    batch_loss = []
+    gradients_values = []
+    print("Running Epochs...")
+    for epoch in range(params['EPOCHS']):
+        print("Epoch ", epoch)
+        start = time.time()
+
+        train_loss.reset_states()
+        train_accuracy.reset_states()
+
+        for (batch, (inp, tar)) in enumerate(train_batches):
+            train_step(inp, tar, transformer, optimizer, loss_object, train_loss, train_accuracy,gradients_values)
+            current_accuracy = train_accuracy.result()
+            current_loss = train_loss.result()
+            batch_accuracies.append(current_accuracy.numpy())
+            batch_loss.append(current_loss.numpy())
+
+            if batch % 1 == 0:
+                print(f'Epoch {epoch + 1} Batch {batch} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
+
+        if (epoch + 1) % 1 == 0:
+            ckpt_save_path = ckpt_manager.save()
+            print(f'Saving checkpoint for epoch {epoch+1} at {ckpt_save_path}')
+
+        print(f'Epoch {epoch + 1} Loss {train_loss.result():.4f} Accuracy {train_accuracy.result():.4f}')
+
+        print(f'Time taken for 1 epoch: {time.time() - start:.2f} secs\n')
+
+    # Plot accuracy curve
+    plt.plot(batch_accuracies)
+    plt.xlabel('Batch Number')
+    plt.ylabel('Batch Accuracy')
+    plt.title('Batch Accuracy Curve')
+    plt.savefig('results/BatchAccuracyCurve.png')
+    plt.show()
+
+    # Plot Lsss curve
+    plt.plot(batch_accuracies)
+    plt.xlabel('Batch Number')
+    plt.ylabel('Batch Loss')
+    plt.title('Batch Loss Curve')
+    plt.savefig('results/BatchLossCurve.png')
+    plt.show()
+
+    for layer in transformer.layers:
+        if hasattr(layer, 'kernel') and layer.kernel is not None:
+            plt.hist(layer.kernel.numpy().flatten(), bins=100, alpha=0.5, label='Weights')
+        if hasattr(layer, 'bias') and layer.bias is not None:
+            plt.hist(layer.bias.numpy().flatten(), bins=100, alpha=0.5, label='Biases')
+    plt.legend()
+    plt.xlabel('Value')
+    plt.ylabel('Frequency')
+    plt.title('Weights and Biases Distribution')
+    plt.savefig('results/WeightsBiasesDistribution.png')
+    plt.show()
+
+
+    plt.hist(np.concatenate(gradients_values), bins=100)
+    plt.xlabel('Gradient Value')
+    plt.ylabel('Frequency')
+    plt.title('Gradients Distribution')
+    plt.savefig('results/GradientsDistribution.png')
+    plt.show()
+
+    example_input, example_target = list(train_batches.take(1))[0]
+    # Get the attention weights from the transformer
+    _, attention_weights = transformer([example_input, example_target[:, :-1]], training=False)
+    # Plot the attention map for a specific layer and head
+    layer = 0
+    head = 0
+    attention_map = attention_weights[f'decoder_layer{layer + 1}_block1'][0, head].numpy()
+
+    plt.imshow(attention_map)
+    plt.colorbar()
+    plt.xlabel('Target Position')
+    plt.ylabel('Input Position')
+    plt.title(f'Attention Map (Layer {layer + 1}, Head {head + 1})')
+    plt.savefig(f'results/AttentionMap_Layer{layer + 1}_Head{head + 1}.png')
+    plt.show()
+
+if __name__ == "__main__":
+    params = load_hyperparams('parameters/params.json')
+    main_train(params)
+    
+import os
+import random
+import tensorflow as tf
+import matplotlib.pyplot as plt
+from data.data import Data
+from components.transformer import Transformer
+from vit_keras import vit
+import json 
+def load_hyperparams(json_file):
+    with open(json_file, 'r') as j:
+        params = json.load(j)
+    return params
+def caption_image(image_path, transformer, index_to_word):
+    """
+    Uses the Transformer passed in the argument to caption the image 
+    """
+    img = plt.imread(image_path)
+    resized_image = tf.image.resize(
+        tf.convert_to_tensor([img]), size=(IMAGE_SIZE, IMAGE_SIZE)
+    )
+    ## Scaling the images
+    resized_image = resized_image/255.
+    ## Initializing the output arrays 
+    output_array = tf.TensorArray(dtype=tf.int64, size=0, dynamic_size=True)
+    output_array = output_array.write(0, [3])
+    output = tf.transpose(output_array.stack())
+
+    for i in tf.range(50):
+        output = tf.transpose(output_array.stack())
+        predictions, _ = transformer([resized_image, output], training=False)
+        predictions = predictions[:, -1:, :]
+        predicted_id = tf.argmax(predictions, axis=-1)
+        output_array = output_array.write(i+1, predicted_id[0])
+        if predicted_id == [4]:
+            break
+
+    output = tf.transpose(output_array.stack())
+    print(index_to_word(output))
+    plt.figure(figsize =  (5,  5))
+    plt.imshow(resized_image[0])
+    plt.axis("off")
+    plt.show()
+
+# Set up the Data instance and obtain the test data
+params = load_hyperparams('parameters/params.json')
+
+data = Data(params)
+image_dataset, cap_vector = data()
+test_image_dataset, test_caption_vector = data.get_test_data()
+data.mappings()
+# Set the IMAGE_SIZE constant to the desired size
+IMAGE_SIZE = 224
+
+# Get the index_to_word layer from the Data instance
+index_to_word = data.index_to_word
+vit_model = vit.vit_b32(
+        image_size = 224,
+        activation = 'softmax',
+        pretrained = True,
+        include_top = False,
+        pretrained_top = False,
+        )
+
+new_input = vit_model.input
+hidden_layer = vit_model.layers[-2].output
+## The New Vision Transformer Model with the required output shapes 
+vision_transformer_model = tf.keras.Model(new_input, hidden_layer)
+# Load the model from the saved checkpoint
+checkpoint_path = './checkpoints/train'
+ckpt = tf.train.Checkpoint(transformer=Transformer(
+    num_layers=params['num_layers'],
+    d_model=params['d_model'],
+    num_heads=params['num_heads'],
+    dff=params['dff'],
+    target_vocab_size=params['vocab_size'],
+    max_tokens=128,
+    vision_transformer=vision_transformer_model,
+    rate=params['dropout_rate']),
+    optimizer=tf.keras.optimizers.Adam()
+)
+
+ckpt_manager = tf.train.CheckpointManager(ckpt, checkpoint_path, max_to_keep=5)
+if ckpt_manager.latest_checkpoint:
+    ckpt.restore(ckpt_manager.latest_checkpoint)
+    print('Latest checkpoint restored!!')
+
+transformer = ckpt.transformer
+# Caption 15 random images from the test dataset
+for i in range(5):
+    a = random.randint(0, len(test_image_dataset) - 1)
+    img_path = data.image_name_vector_test[a]
+    caption_image(img_path, transformer, index_to_word)
+    
+
+
+import tensorflow as tf
+import matplotlib.pyplot as plt
+import collections
+import random
+import numpy as np
+import os
+import time
+import json
+import pickle
+from PIL import Image
+
+class Data():
+    def __init__(self, params):
+        self.data_dir = params['data_dir']
+        self.max_cap_length = params['max_cap_length']
+        self.vocab_size = params['vocab_size']
+
+
+    def load_data(self):
+        # MS-COCO Image captinoning dataset
+        #  Download image annotations
+        annotations_folder = self.data_dir + '/annotations/'
+        if not os.path.exists(annotations_folder):
+            annotation_zip = tf.keras.utils.get_file('captions.zip',
+                                                    cache_subdir=os.path.abspath('./data'),
+                                                    origin='http://images.cocodataset.org/annotations/annotations_trainval2014.zip',
+                                                    extract=True)
+            self.annotation_file = os.path.dirname(annotation_zip)+'/data/annotations/captions_train2014.json'
+            os.remove(annotation_zip)
+
+        # Dowwnload Images 
+        image_folder = self.data_dir + '/train2014/'
+        if not os.path.exists(image_folder):
+            image_zip = tf.keras.utils.get_file('train2014.zip',
+                                                cache_subdir=os.path.abspath('./data'),
+                                                origin='http://images.cocodataset.org/zips/train2014.zip',
+                                                extract=True)
+            self.images_path = os.path.dirname(image_zip) + image_folder
+            os.remove(image_zip)
+
+        else:
+            self.annotation_file =  annotations_folder + 'captions_train2014.json'
+            self.images_path = image_folder
+    
+    
+    def img_to_cap(self):
+        # Load annotations json file 
+        with open(self.annotation_file,'r') as f:
+            self.annotations = json.load(f)
+        self.image_path_to_cap = collections.defaultdict(list)
+
+        # Grouping all the captions together for the same image.
+        for cap in self.annotations['annotations']:
+            caption = f"<start>{cap['caption']}<end>"
+            image_path = self.images_path + 'COCO_train2014_' + '%012d.jpg' % (cap['image_id'])
+            self.image_path_to_cap[image_path].append(caption)
+    
+    def path_cap_list(self):
+        image_paths = list(self.image_path_to_cap.keys())
+        random.shuffle(image_paths)
+
+        self.train_image_paths = image_paths
+        
+        self.train_captions = []
+        self.image_name_vector = []
+
+        for img_path in self.train_image_paths:
+            cap_list = self.image_path_to_cap[img_path]
+            self.train_captions.extend(cap_list)
+            self.image_name_vector.extend([img_path]*len(cap_list))
+
+    def standardize(self, inputs):
+        # remove all unnecesary characters in the caption except for '<>' as we want to preserve <start> and <end> tokens.
+        inputs = tf.strings.lower(inputs)
+        return tf.strings.regex_replace(inputs,
+                                        r"!\"#$%&\(\)\*\+.,-/:;=?@\[\\\]^_`{|}~", "")
+    
+    def tokenizer(self):
+        self.caption_dataset = tf.data.Dataset.from_tensor_slices(self.train_captions)
+
+        # Check if vocabulary file exists
+        vocab_file = "vocabulary.txt"
+        try:
+            with open(vocab_file, "r") as f:
+                vocabulary = [line.strip() for line in f.readlines()]
+            print("Vocabulary loaded from file.")
+        except FileNotFoundError:
+            text_vectorization = tf.keras.layers.TextVectorization(
+                max_tokens=self.vocab_size,
+                standardize=self.standardize,
+                output_sequence_length=self.max_cap_length)
+
+            text_vectorization.adapt(self.caption_dataset)
+
+            # Save vocabulary to an external file
+            vocabulary = text_vectorization.get_vocabulary()
+            with open(vocab_file, "w") as f:
+                for word in vocabulary:
+                    f.write(f"{word}\n")
+            print("Vocabulary saved to file.")
+
+        self.tokenizer_object = tf.keras.layers.TextVectorization(
+            max_tokens=self.vocab_size,
+            standardize=self.standardize,
+            output_sequence_length=self.max_cap_length,
+            vocabulary=vocabulary)
+
+        self.caption_vector = self.caption_dataset.map(lambda x: self.tokenizer_object(x))
+        return self.caption_vector
+
+
+    def mappings(self):
+        self.word_to_index = tf.keras.layers.StringLookup(
+                            mask_token="",
+                            vocabulary=self.tokenizer_object.get_vocabulary())
+        
+        self.index_to_word = tf.keras.layers.StringLookup(
+                            mask_token="",
+                            vocabulary=self.tokenizer_object.get_vocabulary(),
+                            invert=True)
+        
+    def load_image(self, image_path):
+        img = tf.io.read_file(image_path)
+        img = tf.io.decode_jpeg(img, channels=3)
+        img = tf.keras.layers.Resizing(224, 224)(img)
+        return img 
+    
+    def rescale(self, img):
+        return img/255.
+    
+    def resize(self, img):
+        return tf.image.resize(tf.convert_to_tensor([img]), size=(224, 224))
+
+    def transform_image(self):
+        # load_image, rescale
+        self.image_ds = tf.data.Dataset.from_tensor_slices(self.image_name_vector)
+        self.image_ds = self.image_ds.map(self.load_image)
+        self.image_ds = self.image_ds.map(self.rescale)
+        self.image_ds = self.image_ds.map(self.resize)
+        return self.image_ds
+    def get_test_data(self):
+        # Get the first 10 image paths and captions as test data
+        test_image_paths = self.train_image_paths[:10]
+        test_captions = []
+        test_image_name_vector = []
+        for img_path in test_image_paths:
+            cap_list = self.image_path_to_cap[img_path]
+            test_captions.extend(cap_list)
+            test_image_name_vector.extend([img_path] * len(cap_list))
+
+        # Update image_name_vector_test attribute
+        self.image_name_vector_test = test_image_name_vector
+
+        # Create test image dataset
+        test_image_ds = tf.data.Dataset.from_tensor_slices(test_image_name_vector)
+        test_image_ds = test_image_ds.map(self.load_image)
+        test_image_ds = test_image_ds.map(self.rescale)
+        test_image_ds = test_image_ds.map(self.resize)
+
+        # Create test caption dataset
+        test_caption_ds = tf.data.Dataset.from_tensor_slices(test_captions)
+        test_caption_vector = test_caption_ds.map(lambda x: self.tokenizer_object(x))
+
+        return test_image_ds, test_caption_vector
+    def __call__(self):
+
+        self.load_data()
+        self.img_to_cap()
+        self.path_cap_list()
+        cap_vector = self.tokenizer()
+        image_dataset = self.transform_image()
+        return image_dataset, cap_vector
+
+
+{
+    "data_dir"        : "data",
+    "max_cap_length"  : 50,
+    "vocab_size"      : 5000,
+    "num_layers"      : 2,
+    "d_model"         : 768,
+    "dff"             : 2048,
+    "num_heads"       : 2,
+    "dropout_rate"    : 0.1,
+    "EPOCHS"          : 10,
+    "BATCH_SIZE"      : 64
+}
